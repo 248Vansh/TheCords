@@ -1,13 +1,10 @@
 import networkx as nx
 
-def build_graph():
+def build_graph_from_routes(routes):
     G = nx.Graph()
-
-    # Simple demo route Delhi -> Kanpur -> Patna -> Kolkata -> Guwahati
-    G.add_edge("Delhi", "Kanpur", distance=500)
-    G.add_edge("Kanpur", "Patna", distance=600)
-    G.add_edge("Patna", "Kolkata", distance=470)
-    G.add_edge("Kolkata", "Guwahati", distance=1000)
-    G.add_edge("Patna", "Guwahati", distance=900)  # Alternate path skipping Kolkata
-
+    for route in routes:
+        for i in range(len(route) - 1):
+            # here distance is dummy; you can later use Google Maps API for real
+            G.add_edge(route[i], route[i+1], distance=100)
     return G
+

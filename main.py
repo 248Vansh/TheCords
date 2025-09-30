@@ -1,43 +1,79 @@
-# main.py
+from fastapi import FastAPI
+from pydantic import BaseModel
 from pdfParser import extract_routes
 from graphBuilder import build_graph_from_routes
 from routeFinder import find_route
 from pathwayPipeline import answer_query
 from weather import get_weather
+from fastapi.middleware.cors import CORSMiddleware
 
-if __name__ == "__main__":
-    source = "Delhi"
-    destination = "Guwahati"
+app = FastAPI()
 
-    # 1️⃣ Get initial route from PDF (optional: you can use Gemini to suggest route instead)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or ["http://localhost:5173"] for more security
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class RouteRequest(BaseModel):
+    start: str
+    end: str
+
+
+def summarize_route(long_text: str):
+    prompt = f"""
+    Summarize the following route description into bullet points.
+    Include only key cities, highways, and main advice. Avoid long paragraphs.
+
+    Route:
+    {long_text}
+    """
+    summary = answer_query(prompt)
+    return summary
+
+@app.post("/route")
+def get_route(req: RouteRequest):
+    source = req.start
+    destination = req.end
+
     routes = extract_routes("highways/highways.pdf")
     G = build_graph_from_routes(routes)
 
-    # 2️⃣ Ask Gemini for best route using highways data
     query = f"Find the best route from {source} to {destination} using national highways."
     initial_route_text = answer_query(query)
-    print(f"Initial route suggested by Gemini:\n{initial_route_text}\n")
 
-    # Assume Gemini outputs comma-separated cities
-    route = [city.strip() for city in initial_route_text.split(",")]
+    # Summarize the output
+    initial_route_summary = summarize_route(initial_route_text)
 
-    # 3️⃣ Check weather along route
+    # Weather checks
+    route_cities = [city.strip() for city in initial_route_text.split(",")]
     bad_cities = []
-    for city in route:
+    weather_info = []
+    for city in route_cities:
         desc, temp = get_weather(city)
-        print(f"{city}: {desc}, {temp}°C")
+        weather_info.append({"city": city, "weather": desc, "temp": temp})
         if any(bad in desc.lower() for bad in ["storm", "rain", "mist", "snow", "hail"]):
-            print(f"⚠️ Bad weather detected at {city}")
             bad_cities.append(city)
 
-    # 4️⃣ Ask Gemini for alternate route if needed
+    alternate_route_text = None
+    alternate_route_summary = None
     if bad_cities:
         avoid_str = ", ".join(bad_cities)
         query_alt = f"Find the best route from {source} to {destination} avoiding these cities due to bad weather: {avoid_str}."
         alternate_route_text = answer_query(query_alt)
-        print(f"\nAlternate route suggested by Gemini:\n{alternate_route_text}")
-    else:
-        print("\nRoute is safe, no bad weather detected along the way.")
+        alternate_route_summary = summarize_route(alternate_route_text)
+
+    return {
+        "initial_route": initial_route_summary,
+        "weather": weather_info,
+        "bad_cities": bad_cities,
+        "alternate_route": alternate_route_summary,
+    }
+
+
+
 
 
 

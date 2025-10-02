@@ -2,16 +2,17 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from pdfParser import extract_routes
 from graphBuilder import build_graph_from_routes
-from routeFinder import find_route
 from pathwayPipeline import answer_query
 from weather import get_weather
 from fastapi.middleware.cors import CORSMiddleware
+import json
+import re
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # or ["http://localhost:5173"] for more security
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -21,61 +22,66 @@ class RouteRequest(BaseModel):
     start: str
     end: str
 
-
-def summarize_route(long_text: str):
-    prompt = f"""
-    Summarize the following route description into bullet points.
-    Include only key cities, highways, and main advice. Avoid long paragraphs.
-
-    Route:
-    {long_text}
-    """
-    summary = answer_query(prompt)
-    return summary
-
 @app.post("/route")
 def get_route(req: RouteRequest):
     source = req.start
     destination = req.end
 
+    # Extract highways graph (optional if used later)
     routes = extract_routes("highways/highways.pdf")
     G = build_graph_from_routes(routes)
 
-    query = f"Find the best route from {source} to {destination} using national highways."
-    initial_route_text = answer_query(query)
+    # Ask Gemini to return structured JSON
+    query = f"""
+    Find the best route from {source} to {destination} using national highways.
+    Return the result as a JSON array of segments with this format:
+    [
+        {{"from": "CityName", "to": "CityName", "highway": "NHXX"}}
+    ]
+    Only return JSON, no extra text.
+    """
+    route_text = answer_query(query)
 
-    # Summarize the output
-    initial_route_summary = summarize_route(initial_route_text)
+    # Clean up Gemini response from Markdown code blocks
+    clean_text = route_text.strip()
+    clean_text = re.sub(r"^```json\s*", "", clean_text)
+    clean_text = re.sub(r"^```", "", clean_text)
+    clean_text = re.sub(r"```$", "", clean_text)
 
-    # Weather checks
-    route_cities = [city.strip() for city in initial_route_text.split(",")]
-    bad_cities = []
-    weather_info = []
-    for city in route_cities:
-        desc, temp = get_weather(city)
-        weather_info.append({"city": city, "weather": desc, "temp": temp})
-        if any(bad in desc.lower() for bad in ["storm", "rain", "mist", "snow", "hail"]):
-            bad_cities.append(city)
+    # Parse JSON
+    try:
+        segments = json.loads(clean_text)
+    except json.JSONDecodeError:
+        print("Failed to parse JSON from Gemini:", route_text)
+        segments = []
 
-    alternate_route_text = None
-    alternate_route_summary = None
-    if bad_cities:
-        avoid_str = ", ".join(bad_cities)
-        query_alt = f"Find the best route from {source} to {destination} avoiding these cities due to bad weather: {avoid_str}."
-        alternate_route_text = answer_query(query_alt)
-        alternate_route_summary = summarize_route(alternate_route_text)
+    # Debug: Print parsed segments
+    print("Parsed segments:", segments)
 
-    return {
-        "initial_route": initial_route_summary,
-        "weather": weather_info,
-        "bad_cities": bad_cities,
-        "alternate_route": alternate_route_summary,
-    }
+    # Add weather info and guidelines
+    route_output = []
+    for seg in segments:
+        desc_from, temp_from = get_weather(seg["from"])
+        desc_to, temp_to = get_weather(seg["to"])
 
+        # Ask Gemini for travel guidelines given weather
+        query_guidelines = f"""
+        You are a road safety assistant. 
+        The weather at {seg['to']} is '{desc_to}' with temperature {temp_to}°C. 
+        Suggest travel safety guidelines for someone driving from {seg['from']} to {seg['to']} via {seg['highway']}.
+        Keep it short and practical.
+        """
+        guidelines = answer_query(query_guidelines)
 
+        route_output.append({
+            "from": f"{seg['from']} (Weather: {desc_from}, {temp_from}°C)",
+            "to": f"{seg['to']} (Weather: {desc_to}, {temp_to}°C)",
+            "highway": seg["highway"],
+            "guidelines": guidelines.strip()
+        })
 
+    # Debug: Print final route output
+    print("Route output:", route_output)
 
-
-
-
+    return {"route_segments": route_output}
 

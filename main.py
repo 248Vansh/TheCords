@@ -1,14 +1,13 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from pdfParser import extract_routes
-from graphBuilder import build_graph_from_routes
-from pathwayPipeline import answer_query
+from pathwayPipeline import answer_query, get_all_docs, client
 from weather import get_weather
 from fastapi.middleware.cors import CORSMiddleware
 import json, re, os, requests
 from dotenv import load_dotenv
+import pandas as pd
 
-# Load .env
+# Load environment variables
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
@@ -22,6 +21,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -----------------------------
+# Request Models
+# -----------------------------
 class RouteRequest(BaseModel):
     start: str
     end: str
@@ -29,11 +31,16 @@ class RouteRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
 
+class FuelCostRequest(BaseModel):
+    vehicle: str
+    fuel_type: str
+    distance_km: float
+
 # -----------------------------
-# Traffic + Directions function
+# Traffic + Directions
 # -----------------------------
 def get_route_with_traffic(start, end):
-    """Fetch step-wise route with live traffic from Google Directions API"""
+    """Fetch step-wise route with live traffic from Google Directions API."""
     url = "https://maps.googleapis.com/maps/api/directions/json"
     params = {
         "origin": start,
@@ -71,40 +78,59 @@ def get_route(req: RouteRequest):
     source = req.start
     destination = req.end
 
-    # Extract highways graph
-    routes = extract_routes("highways/highways.pdf")
-    G = build_graph_from_routes(routes)
-
-    # Gemini structured highway segments
     query_route = f"""
-    Find best route from {source} to {destination} using national highways.
-    Return as JSON: [{{"from": "CityName", "to": "CityName", "highway": "NHXX"}}]
-    Only return JSON.
+    Find best route from {source} to {destination} using national highways dataset.
+    Return ONLY valid JSON array like:
+    [{{"from": "CityName", "to": "CityName", "highway": "NHXX"}}]
+    No text, no explanations.
     """
+
     route_text = answer_query(query_route)
-    clean_text = re.sub(r"^```json\s*|```$", "", route_text.strip())
+
+    # 🛠 Debug log: see what Gemini gave
+    print("🔎 Gemini raw output:", route_text)
+
+    # Remove markdown/json wrappers if any
+    clean_text = re.sub(r"^```json\s*|\s*```$", "", route_text.strip())
+
+    # Try parsing JSON
     try:
         segments = json.loads(clean_text)
-    except:
-        segments = []
+    except Exception:
+        # If Gemini gave text with JSON inside, extract it
+        match = re.search(r"\[.*\]", clean_text, re.DOTALL)
+        if match:
+            try:
+                segments = json.loads(match.group(0))
+            except:
+                segments = []
+        else:
+            segments = []
 
+    # If still nothing, return error
+    if not segments:
+        return {"error": "No valid route data received", "raw": route_text}
+
+    # Build final output
     route_output = []
     for seg in segments:
-        start_city = seg["from"]
-        end_city = seg["to"]
+        start_city = seg.get("from")
+        end_city = seg.get("to")
+        highway = seg.get("highway", "Unknown")
 
-        # Get traffic info
+        if not start_city or not end_city:
+            continue
+
         traffic_data = get_route_with_traffic(start_city, end_city)
         desc_from, temp_from = get_weather(start_city)
         desc_to, temp_to = get_weather(end_city)
 
-        # Gemini short emoji-friendly guidelines
         traffic_str = traffic_data[0]["traffic_duration"] if traffic_data else "N/A"
         query_guidelines = f"""
         You are a road safety assistant.
         Weather at {end_city}: '{desc_to}', {temp_to}°C.
         Traffic duration: {traffic_str}
-        Suggest 3-4 concise, practical driving tips from {start_city} to {end_city} via {seg['highway']}.
+        Suggest 3-4 concise, practical driving tips from {start_city} to {end_city} via {highway}.
         Use emojis, max 30 words per tip.
         Only return tips, no extra text.
         """
@@ -113,7 +139,7 @@ def get_route(req: RouteRequest):
         route_output.append({
             "from": f"{start_city} (Weather: {desc_from}, {temp_from}°C)",
             "to": f"{end_city} (Weather: {desc_to}, {temp_to}°C)",
-            "highway": seg["highway"],
+            "highway": highway,
             "traffic": traffic_data,
             "guidelines": guidelines.strip()
         })
@@ -125,17 +151,15 @@ def get_route(req: RouteRequest):
 # -----------------------------
 @app.get("/cities")
 def get_cities():
-    query_cities = """
-    Extract all unique city names from the highways dataset.
-    Return as JSON array like ["Delhi","Jaipur",...]. Only return JSON.
-    """
-    city_text = answer_query(query_cities)
-    clean_text = re.sub(r"^```json\s*|```$", "", city_text.strip())
     try:
-        cities = json.loads(clean_text)
-    except:
-        cities = []
-    return {"cities": sorted(set(cities))}
+        df = pd.read_csv("./highways/highways_full.csv")
+
+        # Collect unique cities from both start and end
+        cities = set(df["start_city"].dropna().unique()) | set(df["end_city"].dropna().unique())
+
+        return {"cities": sorted(cities)}
+    except Exception as e:
+        return {"cities": [], "error": str(e)}
 
 # -----------------------------
 # Chat endpoint
@@ -144,8 +168,6 @@ def get_cities():
 def chat(req: ChatRequest):
     user_message = req.message
 
-    # --- Attempt to extract start/end cities from user message ---
-    import re
     city_pattern = re.compile(r"from\s+([A-Za-z\s]+)\s+to\s+([A-Za-z\s]+)", re.IGNORECASE)
     match = city_pattern.search(user_message)
     start_city, end_city = (None, None)
@@ -153,14 +175,9 @@ def chat(req: ChatRequest):
         start_city = match.group(1).strip()
         end_city = match.group(2).strip()
 
-    traffic_info = None
-    weather_info = None
-
+    traffic_info, weather_info = None, None
     if start_city and end_city:
-        # Get traffic info for the route
         traffic_info = get_route_with_traffic(start_city, end_city)
-
-        # Get weather info for start & end
         desc_from, temp_from = get_weather(start_city)
         desc_to, temp_to = get_weather(end_city)
         weather_info = {
@@ -168,35 +185,29 @@ def chat(req: ChatRequest):
             "to": f"{desc_to}, {temp_to}°C"
         }
 
-    # Build Pathway prompt with context
     prompt = f"""
 You are a helpful travel assistant using Pathway. Answer the user's query concisely, practically, and emoji-friendly.
 
 User asked: "{user_message}"
 
 {f"Route from {start_city} to {end_city} detected." if start_city and end_city else ""}
-{f"Traffic info: {traffic_info[0]['traffic_duration'] if traffic_info else 'N/A'}" if traffic_info else ""}
+{f"Traffic info: From {start_city} to {end_city}: {traffic_info[0]['traffic_duration'] if traffic_info else 'N/A'}" if traffic_info else ""}
 {f"Weather: From {start_city}: {weather_info['from']}, To {end_city}: {weather_info['to']}" if weather_info else ""}
 
 Provide a short, practical, easy-to-read response. Use emojis where relevant. Max 5 sentences.
 """
-
     response = answer_query(prompt)
     return {"reply": response}
 
-class FuelCostRequest(BaseModel):
-    vehicle: str         # e.g., "Maruti Swift Dzire"
-    fuel_type: str       # "Petrol", "Diesel", "CNG"
-    distance_km: float   # Distance of route in km
-
+# -----------------------------
+# Fuel cost endpoint
+# -----------------------------
 @app.post("/fuel_cost")
 def fuel_cost(req: FuelCostRequest):
     vehicle = req.vehicle
     fuel_type = req.fuel_type
     distance = req.distance_km
 
-    # 1. Fetch vehicle mileage (km/l) — can be hardcoded DB or web scraping
-    # Example hardcoded dict for prototype:
     vehicle_mileage_db = {
         "Maruti Swift Dzire": {"Petrol": 23, "Diesel": 28},
         "Hyundai Creta": {"Petrol": 16, "Diesel": 21},
@@ -205,17 +216,12 @@ def fuel_cost(req: FuelCostRequest):
     if not mileage:
         return {"error": "Vehicle/fuel data not found"}
 
-    # 2. Apply practical adjustment (~10-15% lower than official)
     practical_mileage = mileage * 0.85
-
-    # 3. Fetch latest fuel prices in India (scraping or API)
-    # For prototype, let's hardcode average prices
-    fuel_price_db = {"Petrol": 102.5, "Diesel": 93.0, "CNG": 65.0}  # ₹/liter
+    fuel_price_db = {"Petrol": 102.5, "Diesel": 93.0, "CNG": 65.0}
     price_per_liter = fuel_price_db.get(fuel_type)
     if not price_per_liter:
         return {"error": "Fuel type not supported"}
 
-    # 4. Compute fuel cost
     estimated_cost = (distance / practical_mileage) * price_per_liter
 
     return {
@@ -227,9 +233,3 @@ def fuel_cost(req: FuelCostRequest):
         "price_per_liter": price_per_liter,
         "estimated_cost": round(estimated_cost, 2)
     }
-
-
-
-
-
-

@@ -5,8 +5,12 @@ from graphBuilder import build_graph_from_routes
 from pathwayPipeline import answer_query
 from weather import get_weather
 from fastapi.middleware.cors import CORSMiddleware
-import json
-import re
+import json, re, os, requests
+from dotenv import load_dotenv
+
+# Load .env
+load_dotenv()
+GOOGLE_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
 app = FastAPI()
 
@@ -22,124 +26,165 @@ class RouteRequest(BaseModel):
     start: str
     end: str
 
+class ChatRequest(BaseModel):
+    message: str
+
+# -----------------------------
+# Traffic + Directions function
+# -----------------------------
+def get_route_with_traffic(start, end):
+    """Fetch step-wise route with live traffic from Google Directions API"""
+    url = "https://maps.googleapis.com/maps/api/directions/json"
+    params = {
+        "origin": start,
+        "destination": end,
+        "key": GOOGLE_API_KEY,
+        "mode": "driving",
+        "departure_time": "now",
+        "traffic_model": "best_guess"
+    }
+    resp = requests.get(url, params=params)
+    if resp.status_code != 200:
+        return []
+    data = resp.json()
+    if data.get("status") != "OK":
+        return []
+    
+    segments = []
+    for leg in data["routes"][0]["legs"]:
+        for step in leg["steps"]:
+            segments.append({
+                "from": step["start_location"],
+                "to": step["end_location"],
+                "distance": step["distance"]["text"],
+                "duration": step["duration"]["text"],
+                "traffic_duration": step.get("duration_in_traffic", {}).get("text", step["duration"]["text"]),
+                "instruction": re.sub("<.*?>", "", step["html_instructions"])
+            })
+    return segments
+
+# -----------------------------
+# Route endpoint
+# -----------------------------
 @app.post("/route")
 def get_route(req: RouteRequest):
     source = req.start
     destination = req.end
 
-    # Extract highways graph (optional if used later)
+    # Extract highways graph
     routes = extract_routes("highways/highways.pdf")
     G = build_graph_from_routes(routes)
 
-    # Ask Gemini to return structured JSON for route
+    # Gemini structured highway segments
     query_route = f"""
-    Find the best route from {source} to {destination} using national highways.
-    Return the result as a JSON array of segments with this format:
-    [
-        {{"from": "CityName", "to": "CityName", "highway": "NHXX"}}
-    ]
-    Only return JSON, no extra text.
+    Find best route from {source} to {destination} using national highways.
+    Return as JSON: [{{"from": "CityName", "to": "CityName", "highway": "NHXX"}}]
+    Only return JSON.
     """
     route_text = answer_query(query_route)
-
-    # Clean up Gemini response from Markdown code blocks
-    clean_text = route_text.strip()
-    clean_text = re.sub(r"^```json\s*", "", clean_text)
-    clean_text = re.sub(r"^```", "", clean_text)
-    clean_text = re.sub(r"```$", "", clean_text)
-
-    # Parse JSON
+    clean_text = re.sub(r"^```json\s*|```$", "", route_text.strip())
     try:
         segments = json.loads(clean_text)
-    except json.JSONDecodeError:
-        print("Failed to parse JSON from Gemini:", route_text)
+    except:
         segments = []
 
-    print("Parsed segments:", segments)
-
-    # Add weather info and **short emoji-friendly guidelines**
     route_output = []
     for seg in segments:
-        desc_from, temp_from = get_weather(seg["from"])
-        desc_to, temp_to = get_weather(seg["to"])
+        start_city = seg["from"]
+        end_city = seg["to"]
 
-        # Ask Gemini for concise, emoji-friendly travel guidelines
+        # Get traffic info
+        traffic_data = get_route_with_traffic(start_city, end_city)
+        desc_from, temp_from = get_weather(start_city)
+        desc_to, temp_to = get_weather(end_city)
+
+        # Gemini short emoji-friendly guidelines
+        traffic_str = traffic_data[0]["traffic_duration"] if traffic_data else "N/A"
         query_guidelines = f"""
-        You are a road safety assistant. 
-        The weather at {seg['to']} is '{desc_to}' with temperature {temp_to}°C. 
-        Suggest **3-4 very short, practical safety tips** for driving from {seg['from']} to {seg['to']} via {seg['highway']}.
-        Use relevant **emojis** for each tip instead of numbers.
-        Keep each tip under 15-30 words and **make it easy to read**.
-        Example format:
-        🛑 Slow down
-        💡 Use lights , visibility low
-        ↔️ Keep distance as there fast moving vehicles
-        🧠 Stay alert as there are wild animals nearby
-        Only return the tips, no extra text.
+        You are a road safety assistant.
+        Weather at {end_city}: '{desc_to}', {temp_to}°C.
+        Traffic duration: {traffic_str}
+        Suggest 3-4 concise, practical driving tips from {start_city} to {end_city} via {seg['highway']}.
+        Use emojis, max 30 words per tip.
+        Only return tips, no extra text.
         """
         guidelines = answer_query(query_guidelines)
 
         route_output.append({
-            "from": f"{seg['from']} (Weather: {desc_from}, {temp_from}°C)",
-            "to": f"{seg['to']} (Weather: {desc_to}, {temp_to}°C)",
+            "from": f"{start_city} (Weather: {desc_from}, {temp_from}°C)",
+            "to": f"{end_city} (Weather: {desc_to}, {temp_to}°C)",
             "highway": seg["highway"],
+            "traffic": traffic_data,
             "guidelines": guidelines.strip()
         })
 
-    print("Route output:", route_output)
-
     return {"route_segments": route_output}
 
+# -----------------------------
+# Cities endpoint
+# -----------------------------
 @app.get("/cities")
 def get_cities():
-    """
-    Returns a list of unique cities extracted from highways.pdf using Gemini/Pathway
-    """
     query_cities = """
     Extract all unique city names from the highways dataset.
-    Return the result as a JSON array like:
-    ["Delhi", "Jaipur", "Udaipur", "Mumbai", ...]
-    Only return JSON, no extra text.
+    Return as JSON array like ["Delhi","Jaipur",...]. Only return JSON.
     """
     city_text = answer_query(query_cities)
-
-    clean_text = city_text.strip()
-    clean_text = re.sub(r"^```json\s*", "", clean_text)
-    clean_text = re.sub(r"^```", "", clean_text)
-    clean_text = re.sub(r"```$", "", clean_text)
-
+    clean_text = re.sub(r"^```json\s*|```$", "", city_text.strip())
     try:
         cities = json.loads(clean_text)
-    except json.JSONDecodeError:
-        print("Failed to parse city JSON:", city_text)
+    except:
         cities = []
-
     return {"cities": sorted(set(cities))}
 
-from fastapi import FastAPI
-from pydantic import BaseModel
-from pathwayPipeline import answer_query
-from fastapi.middleware.cors import CORSMiddleware
-
-class ChatRequest(BaseModel):
-    message: str
-
+# -----------------------------
+# Chat endpoint
+# -----------------------------
 @app.post("/chat")
 def chat(req: ChatRequest):
     user_message = req.message
 
-    # Enforce concise, structured, emoji-friendly responses
+    # --- Attempt to extract start/end cities from user message ---
+    import re
+    city_pattern = re.compile(r"from\s+([A-Za-z\s]+)\s+to\s+([A-Za-z\s]+)", re.IGNORECASE)
+    match = city_pattern.search(user_message)
+    start_city, end_city = (None, None)
+    if match:
+        start_city = match.group(1).strip()
+        end_city = match.group(2).strip()
+
+    traffic_info = None
+    weather_info = None
+
+    if start_city and end_city:
+        # Get traffic info for the route
+        traffic_info = get_route_with_traffic(start_city, end_city)
+
+        # Get weather info for start & end
+        desc_from, temp_from = get_weather(start_city)
+        desc_to, temp_to = get_weather(end_city)
+        weather_info = {
+            "from": f"{desc_from}, {temp_from}°C",
+            "to": f"{desc_to}, {temp_to}°C"
+        }
+
+    # Build Pathway prompt with context
     prompt = f"""
-You are a helpful travel assistant.
-Answer the user's query in a very concise, practical way.
-- Use short paragraphs or bullet points.
-- Use emojis to highlight key points if relevant.
-- Avoid long explanations.
-- Maximum 5 sentences.
-User asked: {user_message}
+You are a helpful travel assistant using Pathway. Answer the user's query concisely, practically, and emoji-friendly.
+
+User asked: "{user_message}"
+
+{f"Route from {start_city} to {end_city} detected." if start_city and end_city else ""}
+{f"Traffic info: {traffic_info[0]['traffic_duration'] if traffic_info else 'N/A'}" if traffic_info else ""}
+{f"Weather: From {start_city}: {weather_info['from']}, To {end_city}: {weather_info['to']}" if weather_info else ""}
+
+Provide a short, practical, easy-to-read response. Use emojis where relevant. Max 5 sentences.
 """
+
     response = answer_query(prompt)
     return {"reply": response}
+
+
 
 
 

@@ -1,13 +1,12 @@
-import { MapPin, ArrowRight, AlertCircle } from 'lucide-react';
+import { MapPin, ArrowRight, AlertCircle, Clock } from 'lucide-react';
 import { WeatherIcon } from './WeatherIcon';
 
 function parseWeatherInfo(locationStr) {
-  // Try to match "CityName (Weather: Description, Temp°C)"
   const startIdx = locationStr.indexOf("(Weather:");
   if (startIdx === -1) return { city: locationStr, description: 'Unknown', temperature: '--' };
 
   const city = locationStr.slice(0, startIdx).trim();
-  const weatherPart = locationStr.slice(startIdx + 9, locationStr.length - 1).trim(); // remove "(Weather:" and ")"
+  const weatherPart = locationStr.slice(startIdx + 9, locationStr.length - 1).trim();
   const commaIdx = weatherPart.lastIndexOf(","); 
   if (commaIdx === -1) return { city, description: weatherPart, temperature: '--' };
 
@@ -17,9 +16,23 @@ function parseWeatherInfo(locationStr) {
   return { city, description, temperature };
 }
 
+function getTrafficColor(normalDurationSec, trafficDurationSec) {
+  if (!normalDurationSec || !trafficDurationSec) return 'text-gray-600';
+  const ratio = trafficDurationSec / normalDurationSec;
+  if (ratio <= 1.1) return 'text-green-600';
+  if (ratio <= 1.5) return 'text-orange-600';
+  return 'text-red-600';
+}
+
 export function RouteSegment({ segment, index }) {
   const fromInfo = parseWeatherInfo(segment.from);
   const toInfo = parseWeatherInfo(segment.to);
+
+  const traffic = segment.traffic?.[0]; // first step from Google API
+  const trafficText = traffic?.traffic_duration || traffic?.duration || 'N/A';
+  const normalDurationSec = traffic?.duration?.value || null;
+  const trafficDurationSec = traffic?.duration_in_traffic?.value || traffic?.duration?.value || null;
+  const trafficColor = getTrafficColor(normalDurationSec, trafficDurationSec);
 
   return (
     <div className="route-segment bg-white rounded-2xl shadow-md border border-gray-200 p-6 hover:shadow-lg transition-shadow">
@@ -64,6 +77,16 @@ export function RouteSegment({ segment, index }) {
             <span>{toInfo.description}</span>
             <span className="ml-auto font-medium">{toInfo.temperature}°C</span>
           </div>
+
+          {/* Traffic info */}
+          {trafficText && trafficText !== 'N/A' && (
+            <div className="text-sm text-gray-600 mt-1 flex items-center gap-1">
+              <Clock size={16} className={trafficColor} />
+              <span className={`${trafficColor} font-medium`}>
+                ⏱ Traffic: {trafficText}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 

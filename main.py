@@ -184,6 +184,51 @@ Provide a short, practical, easy-to-read response. Use emojis where relevant. Ma
     response = answer_query(prompt)
     return {"reply": response}
 
+class FuelCostRequest(BaseModel):
+    vehicle: str         # e.g., "Maruti Swift Dzire"
+    fuel_type: str       # "Petrol", "Diesel", "CNG"
+    distance_km: float   # Distance of route in km
+
+@app.post("/fuel_cost")
+def fuel_cost(req: FuelCostRequest):
+    vehicle = req.vehicle
+    fuel_type = req.fuel_type
+    distance = req.distance_km
+
+    # 1. Fetch vehicle mileage (km/l) — can be hardcoded DB or web scraping
+    # Example hardcoded dict for prototype:
+    vehicle_mileage_db = {
+        "Maruti Swift Dzire": {"Petrol": 23, "Diesel": 28},
+        "Hyundai Creta": {"Petrol": 16, "Diesel": 21},
+    }
+    mileage = vehicle_mileage_db.get(vehicle, {}).get(fuel_type)
+    if not mileage:
+        return {"error": "Vehicle/fuel data not found"}
+
+    # 2. Apply practical adjustment (~10-15% lower than official)
+    practical_mileage = mileage * 0.85
+
+    # 3. Fetch latest fuel prices in India (scraping or API)
+    # For prototype, let's hardcode average prices
+    fuel_price_db = {"Petrol": 102.5, "Diesel": 93.0, "CNG": 65.0}  # ₹/liter
+    price_per_liter = fuel_price_db.get(fuel_type)
+    if not price_per_liter:
+        return {"error": "Fuel type not supported"}
+
+    # 4. Compute fuel cost
+    estimated_cost = (distance / practical_mileage) * price_per_liter
+
+    return {
+        "vehicle": vehicle,
+        "fuel_type": fuel_type,
+        "distance_km": distance,
+        "official_mileage": mileage,
+        "practical_mileage": round(practical_mileage, 2),
+        "price_per_liter": price_per_liter,
+        "estimated_cost": round(estimated_cost, 2)
+    }
+
+
 
 
 

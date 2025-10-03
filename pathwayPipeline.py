@@ -1,4 +1,3 @@
-# pathwayPipeline.py
 import pathway as pw
 from pathway import this
 from pathway.xpacks.llm.document_store import DocumentStore
@@ -8,16 +7,11 @@ from pathway.xpacks.llm import embedders
 from pathway.stdlib.indexing.nearest_neighbors import BruteForceKnnFactory
 from dotenv import load_dotenv
 import os
-import google.generativeai as genai  # ✅ fixed import
-
-from weather import get_weather
+from google import genai
 
 # Load Gemini API key
 load_dotenv()
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])  # ✅ configure instead of Client
-
-# Create a model handle we can reuse
-gemini_model = genai.GenerativeModel("gemini-2.5-flash")
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 # 1️⃣ Load PDFs from the 'highways' folder
 documents = pw.io.fs.read("./highways/", format="binary", with_metadata=True)
@@ -76,12 +70,25 @@ filepath_globpattern  metadata_filter  k  query
     retrieved = retrieved.select(docs=this.result)
     return retrieved
 
+from google import genai
+import os
+from dotenv import load_dotenv
+from weather import get_weather
 
-def answer_query(query, cities=None):
+load_dotenv()
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+def answer_query(query, cities=None, k=3):
     """
     Generate an answer using Gemini LLM.
+    Uses Pathway document_store to retrieve relevant context.
     Optionally, provide a list of cities to fetch live weather and include in the prompt.
     """
+    # 🔎 Step 1: Retrieve relevant docs from Pathway
+    retrieved_docs = get_relevant_docs(query, k=k).to_pandas()
+    context_docs = "\n\n".join([str(doc) for doc in retrieved_docs["docs"].tolist()])
+
+    # 🌦 Step 2: Add optional weather info
     context_weather = ""
     if cities:
         weather_info = []
@@ -90,12 +97,22 @@ def answer_query(query, cities=None):
             weather_info.append(f"{city}: {desc}, {temp}°C")
         context_weather = "Live weather along the route:\n" + "\n".join(weather_info)
 
-    # Build the prompt
-    prompt = query
-    if context_weather:
-        prompt += "\n\n" + context_weather
+    # 📝 Step 3: Build the final prompt
+    prompt = f"""
+You are a travel assistant. Use the following context from highway PDFs to answer:
 
-    # Call Gemini
-    response = gemini_model.generate_content(prompt)  # ✅ correct usage
+Context:
+{context_docs}
+
+User query: {query}
+
+{context_weather if context_weather else ""}
+Provide a short, practical, easy-to-read response. Use emojis where relevant.
+"""
+    # 🤖 Step 4: Call Gemini
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
+    )
 
     return response.text

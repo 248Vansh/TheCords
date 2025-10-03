@@ -18,15 +18,15 @@ function App() {
   return (
     <Router>
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-100 relative">
+      {/* Top-right Clock */}
       <Navbar time={time} />
-      <main className="flex-1 pt-24"> {/* pt-24 to push content below navbar */}
+      <main className="flex-1 pt-24">
         <Routes>
-          <Route path="/" element={<Home />} />
+          <Route exact path="/" element={<Home />} />
           <Route path="/about" element={<About />} />
         </Routes>
       </main>
       <Footer />
-
       {/* Floating Chatbot */}
       <ChatbotWidget
         buttonClassName="fixed bottom-6 right-6 bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 rounded-full shadow-xl hover:from-blue-700 hover:to-blue-800 transition"

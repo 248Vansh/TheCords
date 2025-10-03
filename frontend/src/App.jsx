@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Navigation, Loader2, MapPin, Route as RouteIcon } from "lucide-react";
 import { RouteSegment } from "./components/RouteSegment";
+import FuelEstimator from "./components/FuelEstimator"; // ✅ Only once
 import Select from "react-select";
 import ChatbotWidget from "./Chatbot"; // Floating chatbot
 
@@ -76,6 +77,15 @@ function App() {
       setLoading(false);
     }
   };
+
+  // Calculate total route distance in km
+  const totalDistanceKm = routeData?.route_segments?.reduce((acc, seg) => {
+    const lastTraffic = seg.traffic?.[0];
+    if (lastTraffic?.distance?.value) {
+      return acc + lastTraffic.distance.value / 1000; // meters → km
+    }
+    return acc;
+  }, 0);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-100 relative">
@@ -176,9 +186,13 @@ function App() {
               <div className="h-1 flex-1 bg-gradient-to-l from-blue-600 to-blue-400 rounded-full"></div>
             </div>
 
+            {/* Route Segments */}
             {routeData.route_segments.map((segment, index) => (
               <RouteSegment key={index} segment={segment} index={index} />
             ))}
+
+            {/* Fuel Estimator below route segments */}
+            <FuelEstimator distance={totalDistanceKm} />
 
             <div className="bg-gradient-to-r from-green-50 to-blue-50 border border-green-200 rounded-xl p-6 text-center">
               <p className="text-green-800 font-semibold">

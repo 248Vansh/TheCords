@@ -79,11 +79,17 @@ from weather import get_weather
 load_dotenv()
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
-def answer_query(query, cities=None):
+def answer_query(query, cities=None, k=3):
     """
     Generate an answer using Gemini LLM.
+    Uses Pathway document_store to retrieve relevant context.
     Optionally, provide a list of cities to fetch live weather and include in the prompt.
     """
+    # 🔎 Step 1: Retrieve relevant docs from Pathway
+    retrieved_docs = get_relevant_docs(query, k=k).to_pandas()
+    context_docs = "\n\n".join([str(doc) for doc in retrieved_docs["docs"].tolist()])
+
+    # 🌦 Step 2: Add optional weather info
     context_weather = ""
     if cities:
         weather_info = []
@@ -92,12 +98,19 @@ def answer_query(query, cities=None):
             weather_info.append(f"{city}: {desc}, {temp}°C")
         context_weather = "Live weather along the route:\n" + "\n".join(weather_info)
 
-    # Build the prompt
-    prompt = query
-    if context_weather:
-        prompt += "\n\n" + context_weather
+    # 📝 Step 3: Build the final prompt
+    prompt = f"""
+You are a travel assistant. Use the following context from highway PDFs to answer:
 
-    # Call Gemini
+Context:
+{context_docs}
+
+User query: {query}
+
+{context_weather if context_weather else ""}
+Provide a short, practical, easy-to-read response. Use emojis where relevant.
+"""
+    # 🤖 Step 4: Call Gemini
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt

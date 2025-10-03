@@ -71,29 +71,6 @@ filepath_globpattern  metadata_filter  k  query
     retrieved = retrieved.select(docs=this.result)
     return retrieved
 
-
-# 6️⃣ Function to generate answers using Gemini
-# def answer_query(query):
-#     # Retrieve relevant documents
-#     retrieved_docs = get_relevant_docs(query)
-
-#     # Iterate over the reactive table to collect results
-#     retrieved_list = [row for row in retrieved_docs]
-
-#     # Combine text from retrieved docs
-#     context = " ".join(str(doc["text"]) for doc in retrieved_list)
-
-#     # Prepare prompt for Gemini
-#     prompt = f"Using the following highways data: {context}\nAnswer this query: {query}"
-
-#     # Call Gemini LLM
-#     response = client.models.generate_content(
-#         model="gemini-2.5-flash",
-#         contents=prompt
-#     )
-
-#     return response.text
-
 from google import genai
 import os
 from dotenv import load_dotenv

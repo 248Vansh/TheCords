@@ -10,8 +10,10 @@
     "axios": "^1.12.2",
     "lucide-react": "^0.544.0",
     "react": "^19.2.0",
+    "react-chatbot-kit": "^2.2.2",
     "react-dom": "^19.2.0",
     "react-scripts": "^5.0.1",
+    "react-select": "^5.10.2",
     "web-vitals": "^2.1.4"
   },
   "scripts": {

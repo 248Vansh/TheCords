@@ -1,0 +1,10 @@
+fastapi
+pdfplumber
+pydantic
+networkx
+pathway
+dotenv
+google-generativeai
+pathway[xpack-llm]
+pathway[xpack-llm-docs]
+uvicorn

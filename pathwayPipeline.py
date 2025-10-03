@@ -8,11 +8,16 @@ from pathway.xpacks.llm import embedders
 from pathway.stdlib.indexing.nearest_neighbors import BruteForceKnnFactory
 from dotenv import load_dotenv
 import os
-from google import genai
+import google.generativeai as genai  # ✅ fixed import
+
+from weather import get_weather
 
 # Load Gemini API key
 load_dotenv()
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])  # ✅ configure instead of Client
+
+# Create a model handle we can reuse
+gemini_model = genai.GenerativeModel("gemini-2.5-flash")
 
 # 1️⃣ Load PDFs from the 'highways' folder
 documents = pw.io.fs.read("./highways/", format="binary", with_metadata=True)
@@ -71,13 +76,6 @@ filepath_globpattern  metadata_filter  k  query
     retrieved = retrieved.select(docs=this.result)
     return retrieved
 
-from google import genai
-import os
-from dotenv import load_dotenv
-from weather import get_weather
-
-load_dotenv()
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 def answer_query(query, cities=None):
     """
@@ -98,16 +96,6 @@ def answer_query(query, cities=None):
         prompt += "\n\n" + context_weather
 
     # Call Gemini
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt
-    )
+    response = gemini_model.generate_content(prompt)  # ✅ correct usage
 
     return response.text
-
-
-
-
-
-
-

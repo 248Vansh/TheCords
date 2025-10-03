@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Navigation, Loader2, MapPin, Route as RouteIcon } from "lucide-react";
 import { RouteSegment } from "./components/RouteSegment";
 import Select from "react-select";
+import ChatbotWidget from "./Chatbot"; // Floating chatbot
 
 function App() {
   const [cities, setCities] = useState([]);
@@ -12,10 +13,12 @@ function App() {
   const [error, setError] = useState("");
   const [loadingCities, setLoadingCities] = useState(true);
 
-  // Chatbot states
-  const [chatMessage, setChatMessage] = useState("");
-  const [chatReply, setChatReply] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
+  // Clock state
+  const [time, setTime] = useState(new Date());
+  useEffect(() => {
+    const interval = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Fetch cities dynamically
   useEffect(() => {
@@ -74,32 +77,13 @@ function App() {
     }
   };
 
-  // Chatbot submission
-  const handleChat = async (e) => {
-    e.preventDefault();
-    if (!chatMessage.trim()) return;
-
-    setChatLoading(true);
-    setChatReply("");
-
-    try {
-      const res = await fetch("http://127.0.0.1:8000/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: chatMessage }),
-      });
-      const data = await res.json();
-      setChatReply(data.reply);
-    } catch (err) {
-      console.error(err);
-      setChatReply("⚠️ Error connecting to server.");
-    } finally {
-      setChatLoading(false);
-    }
-  };
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-100">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-100 relative">
+      {/* Top-right Clock */}
+      <div className="absolute top-6 right-6 text-gray-700 font-semibold text-lg bg-white px-4 py-2 rounded-xl shadow-md">
+        {time.toLocaleTimeString()}
+      </div>
+
       <div className="max-w-5xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="text-center mb-12 fade-in">
@@ -203,34 +187,13 @@ function App() {
             </div>
           </div>
         )}
-
-        {/* Chatbot Section */}
-        <div className="mt-12 bg-white rounded-2xl shadow-xl p-6 slide-up">
-          <h2 className="text-2xl font-bold mb-4">Ask Smart Assistant</h2>
-          <form onSubmit={handleChat} className="flex gap-3">
-            <input
-              type="text"
-              value={chatMessage}
-              onChange={(e) => setChatMessage(e.target.value)}
-              placeholder="Ask about safety, weather, routes..."
-              className="flex-1 border border-gray-300 rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <button
-              type="submit"
-              disabled={chatLoading}
-              className="bg-blue-600 text-white px-6 py-2 rounded-xl hover:bg-blue-700 transition"
-            >
-              {chatLoading ? "..." : "Send"}
-            </button>
-          </form>
-
-          {chatReply && (
-            <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-xl">
-              <p className="text-gray-800">{chatReply}</p>
-            </div>
-          )}
-        </div>
       </div>
+
+      {/* Floating Chatbot */}
+      <ChatbotWidget
+        buttonClassName="fixed bottom-6 right-6 bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 rounded-full shadow-xl hover:from-blue-700 hover:to-blue-800 transition"
+        panelClassName="fixed bottom-20 right-6 w-80 shadow-2xl rounded-xl overflow-hidden bg-white border border-gray-200 transition-transform duration-300"
+      />
     </div>
   );
 }

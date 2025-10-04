@@ -307,7 +307,7 @@ def fuel_cost(req: FuelCostRequest):
     if not start or not end:
         return {"error": "Please provide both start and end cities."}
 
-    # --- Ask Gemini for distance ---
+    # --- Distance calculation using Gemini ---
     distance_query = f"""
     You are a travel assistant. Estimate realistic driving distance in km from {start} to {end}.
     Return only a number in km. No extra text.
@@ -316,30 +316,20 @@ def fuel_cost(req: FuelCostRequest):
         distance_resp = answer_query(distance_query)
         distance = parse_number_from_gemini(distance_resp)
 
-        # Fallback to Google Maps if Gemini fails
-        if not distance or distance == 0:
-            distance = fetch_google_distance(start, end)
+        # Commented out Google Maps fallback
+        # if not distance or distance == 0:
+        #     distance = fetch_google_distance(start, end)
 
         if not distance or distance == 0:
-            return {"error": "Could not determine distance from Gemini or Google Maps."}
+            return {"error": "Could not determine distance from Gemini."}
     except Exception as e:
         return {"error": f"Gemini distance error: {str(e)}"}
 
-    # --- Ask Gemini for fuel price ---
-    fuel_query = f"""
-    You are a travel assistant. Provide the current price per liter in INR for {fuel_type} fuel in India.
-    Return only a number, no text.
-    """
-    try:
-        fuel_resp = answer_query(fuel_query)
-        price_per_liter = parse_number_from_gemini(fuel_resp)
-
-        # Fallback to default if Gemini fails
-        if not price_per_liter:
-            fuel_price_db = {"Petrol": 110, "Diesel": 100, "CNG": 80}
-            price_per_liter = fuel_price_db.get(fuel_type, 110)
-    except Exception as e:
-        price_per_liter = 110  # fallback default
+    # --- Fuel price (Local DB) ---
+    fuel_price_db = {"Petrol": 98, "Diesel": 82, "CNG": 82}
+    price_per_liter = fuel_price_db.get(fuel_type)
+    if not price_per_liter:
+        return {"error": f"No fuel price data for {fuel_type}"}
 
     # --- Vehicle mileage (local DB) ---
     vehicle_mileage_db = {
@@ -365,3 +355,4 @@ def fuel_cost(req: FuelCostRequest):
         "price_per_liter": round(price_per_liter, 2),
         "estimated_cost": round(estimated_cost, 2)
     }
+
